@@ -1,8 +1,8 @@
 # Genshin Impact - Dialogue Auto-Skip
 
-> **⚠️ DISCLAIMER**: Using third-party software with Genshin Impact is against the game's Terms of Service. Use this tool at your own risk. The developers of this script are not responsible for any consequences, including potential account bans.
+> **DISCLAIMER**: Using third-party software with Genshin Impact is against the game's Terms of Service. Use this tool at your own risk. The developers of this script are not responsible for any consequences, including potential account bans.
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Overview](#overview)
 - [Features](#features)
@@ -17,27 +17,28 @@
 - [Contributing](#contributing)
 - [License](#license)
 
-## 🎮 Overview
+## Overview
 
-An automated dialogue skipper for Genshin Impact that intelligently detects and advances through story dialogue. This version uses keyboard and mouse control to simulate the F key press, automatically selecting the bottom dialogue option when choices appear.
+An automated dialogue skipper for Genshin Impact that intelligently detects and advances through story dialogue. This version uses keyboard and mouse control to simulate the F key press whenever a dialogue panel is on screen.
 
 The script includes human-like behavior patterns with randomized timing and occasional breaks to appear more natural.
 
-## ✨ Features
+## Features
 
 - **Automatic Dialogue Detection**: Uses pixel detection to identify when dialogue is active
-- **Smart Option Selection**: Automatically chooses the bottom dialogue option
+- **Menu Awareness**: Stops pressing F while any game menu is open
+- **Ignores Interaction Prompts**: The `[F]` prompt next to forges, chests and NPCs never triggers a keypress
 - **Multi-Resolution Support**: Auto-detects and adapts to your screen resolution (HD to 4K+)
 - **Human-like Behavior**:
-  - Randomized key press intervals (0.12-0.2 seconds)
-  - Occasional breaks (3-8 seconds) for natural behavior
-  - Intelligent timing variations
+ - Randomized key press intervals (0.12-0.2 seconds)
+ - Occasional breaks (3-8 seconds) for natural behavior
+ - Intelligent timing variations
 - **Easy Controls**: Simple F-key controls for starting, pausing, and stopping
 - **Safe Operation**: Only activates when Genshin Impact is the active window
 - **Loading Screen Detection**: Prevents actions during loading screens
 - **One-Click Setup**: Automated installation script with dependency management
 
-## 📦 Requirements
+## Requirements
 
 ### System Requirements
 - **OS**: Windows (with win32api support)
@@ -51,76 +52,73 @@ The script includes human-like behavior patterns with randomized timing and occa
 - Genshin Impact installed and running
 
 ### In-Game Settings
-**IMPORTANT**: Navigate to **Settings > Other** and set **Auto-Play Story** to **Off**
-
-## 🚀 Installation
+**IMPORTANT**: Navigate to **Settings > Other**and set **Auto-Play Story**to **Off**## Installation
 
 ### Option 1: Automated Setup (Recommended)
 
-1. **Download** this repository or clone it:
-   ```bash
-   git clone https://github.com/1hubert/genshin-dialogue-autoskip.git
-   cd genshin-dialogue-autoskip
-   ```
+1. **Download**this repository or clone it:
+ ```bash
+ git clone https://github.com/1hubert/genshin-dialogue-autoskip.git
+ cd genshin-dialogue-autoskip
+ ```
 
-2. **Right-click** `run.bat` and select **"Run as administrator"**
-   - The script will automatically:
-     - Check for Administrator privileges
-     - Verify Python installation
-     - Install `uv` package manager if needed
-     - Install all dependencies
-     - Launch the application
+2. **Right-click**`run.bat` and select **"Run as administrator"**- The script will automatically:
+ - Check for Administrator privileges
+ - Verify Python installation
+ - Install `uv` package manager if needed
+ - Install all dependencies
+ - Launch the application
 
 ### Option 2: Manual Setup
 
-1. **Install Python 3.11+** from [python.org](https://www.python.org/downloads/)
-   - ✅ Make sure to check "Add Python to PATH" during installation
+1. **Install Python 3.11+**from [python.org](https://www.python.org/downloads/)
+ - Make sure to check "Add Python to PATH" during installation
 
-2. **Install uv** package manager:
-   ```bash
-   pip install uv
-   ```
+2. **Install uv**package manager:
+ ```bash
+ pip install uv
+ ```
 
 3. **Install dependencies**:
-   ```bash
-   uv sync
-   ```
+ ```bash
+ uv sync
+ ```
 
-4. **Run the script** with Admin privileges:
-   ```bash
-   uv run autoskip_dialogue.py
-   ```
+4. **Run the script**with Admin privileges:
+ ```bash
+ uv run autoskip_dialogue.py
+ ```
 
-## 📖 Usage
+## Usage
 
 ### Quick Start
 
-1. **Launch Genshin Impact** and ensure it's running on your primary display
+1. **Launch Genshin Impact**and ensure it's running on your primary display
 
 2. **Run the script**:
-   - Right-click `run.bat` → **"Run as administrator"**, or
-   - Run `autoskip_dialogue.py` with admin privileges
+ - Right-click `run.bat` → **"Run as administrator"**, or
+ - Run `autoskip_dialogue.py` with admin privileges
 
 3. **Verify Resolution**:
-   - On first run, the script will auto-detect your screen resolution
-   - Confirm the displayed resolution is correct
-   - Resolution is saved to `.env` for future runs
+ - On first run, the script will auto-detect your screen resolution
+ - Confirm the displayed resolution is correct
+ - Resolution is saved to `.env` for future runs
 
 4. **Start Auto-Skip**:
-   - Press **F8** to activate auto-skip
-   - The script will now automatically advance dialogue when detected
+ - Press **F8**to activate auto-skip
+ - The script will now automatically advance dialogue when detected
 
 5. **Play the Game**:
-   - Continue playing normally
-   - Dialogue will be automatically skipped when Genshin Impact is the active window
+ - Continue playing normally
+ - Dialogue will be automatically skipped when Genshin Impact is the active window
 
 ### Controls
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| **F8** | Start | Activates auto-skip functionality |
-| **F9** | Pause | Temporarily pauses auto-skip |
-| **F12** | Exit | Closes the application |
+| **F8**| Start | Activates auto-skip functionality |
+| **F9**| Pause | Temporarily pauses auto-skip |
+| **F12**| Exit | Closes the application |
 
 ### Status Indicators
 
@@ -129,7 +127,7 @@ The console will display the current status:
 - **PAUSED**: Auto-skip is temporarily disabled
 - **Taking a break**: Simulating natural pause (3-8 seconds)
 
-## ⚙️ Configuration
+## Configuration
 
 ### Environment Variables
 
@@ -148,20 +146,23 @@ You can manually edit `.env` if the auto-detection is incorrect.
 ### Supported Resolutions
 
 The script automatically adapts to various resolutions including:
-- **1920x1080** (Full HD)
-- **2560x1440** (2K)
-- **3840x2160** (4K)
+- **1920x1080**(Full HD)
+- **2560x1440**(2K)
+- **3840x2160**(4K)
 - Custom resolutions and ultrawide monitors
 
-## 🔧 How It Works
+## How It Works
 
 ### Detection System
 
 The script uses pixel-based detection to identify dialogue states:
 
-1. **Autoplay Button Detection**: Monitors a specific pixel for the characteristic color of the autoplay indicator
-2. **Dialogue Option Detection**: Checks for the white speech bubble indicator in dialogue options
-3. **Loading Screen Protection**: Verifies the game isn't loading before taking action
+1. **Dialogue Panel Detection**: Counts white body text inside the dialogue band, and checks it is broken up into text runs rather than one solid UI panel. This is the only thing that gates pressing F.
+2. **Menu Detection**: Checks for the map, wish, settings, mailbox, events, party setup, escape, handbook and Katheryne screens, so F is never pressed while a menu is open.
+3. **Autoplay Button Detection**: Monitors the characteristic colour of the autoplay indicator, for display only.
+4. **Loading Screen Protection**: Verifies the game isn't loading before taking action
+
+There is no option selection. For normal story dialogue the highlighted reply does not matter, so F is pressed the same way whether or not a choice is on screen. The `[F]` interaction prompt that appears next to forges, chests and NPCs is detected for display only and is deliberately ignored - it never triggers a keypress.
 
 ### Behavior Patterns
 
@@ -178,7 +179,7 @@ To mimic human interaction:
 - **Error Handling**: Gracefully handles errors with informative messages
 - **Retry Logic**: Offers retry option if execution fails
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -192,23 +193,22 @@ To mimic human interaction:
 
 #### Dialogue not being skipped
 - **Verify**:
-  - Genshin Impact is the active window
-  - Auto-skip is enabled (press F8)
-  - In-game "Auto-Play Story" is set to **Off**
-  - Game is running on primary monitor
+ - Genshin Impact is the active window
+ - Auto-skip is enabled (press F8)
+ - In-game "Auto-Play Story" is set to **Off**- Game is running on primary monitor
 
 #### Wrong resolution detected
 - **Solution**: Manually edit `.env` file with correct dimensions:
-  ```env
-  WIDTH=your_width
-  HEIGHT=your_height
-  ```
+ ```env
+ WIDTH=your_width
+ HEIGHT=your_height
+ ```
 
 #### Key presses not working
 - **Check**:
-  - Script is running with Administrator privileges
-  - No other programs are intercepting keyboard input
-  - Genshin Impact has focus
+ - Script is running with Administrator privileges
+ - No other programs are intercepting keyboard input
+ - Genshin Impact has focus
 
 ### Error Messages
 
@@ -227,18 +227,18 @@ If you encounter issues:
 2. Verify all requirements are met
 3. Try running with `--verbose` flag (if available)
 4. Open an issue on GitHub with:
-   - Error message
-   - Python version
-   - Screen resolution
-   - Windows version
+ - Error message
+ - Python version
+ - Screen resolution
+ - Windows version
 
-## 🎮 Gamepad Support
+## Gamepad Support
 
-This branch (`main`) is optimized for **keyboard and mouse** controls.
+This branch (`main`) is optimized for **keyboard and mouse**controls.
 
 If you play Genshin Impact with a **gamepad/controller**, switch to the [gamepad_only](https://github.com/1hubert/genshin-dialogue-autoskip/tree/gamepad_only) branch for gamepad-optimized detection and controls.
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Here's how you can help:
 
@@ -246,16 +246,16 @@ Contributions are welcome! Here's how you can help:
 
 1. Fork and clone the repository
 2. Install development dependencies:
-   ```bash
-   uv sync
-   ```
+ ```bash
+ uv sync
+ ```
 
 3. Run linters and type checkers:
-   ```bash
-   uvx ruff check .
-   uvx ruff format .
-   uvx mypy autoskip_dialogue.py
-   ```
+ ```bash
+ uvx ruff check .
+ uvx ruff format .
+ uvx mypy autoskip_dialogue.py
+ ```
 
 ### Pull Request Guidelines
 
@@ -265,7 +265,7 @@ Contributions are welcome! Here's how you can help:
 - Test on multiple resolutions if possible
 - Update documentation for new features
 
-## 📄 License
+## License
 
 This project is provided as-is for educational purposes.
 
@@ -273,4 +273,4 @@ This project is provided as-is for educational purposes.
 
 ---
 
-**Made with ❤️ by the community** | **Not affiliated with HoYoverse/miHoYo**
+**Made with by the community**| **Not affiliated with HoYoverse/miHoYo**

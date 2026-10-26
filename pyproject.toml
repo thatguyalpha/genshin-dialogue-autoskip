@@ -10,4 +10,7 @@ dependencies = [
     "python-dotenv==1.0.0",
     "types-pywin32>=306.0.0.20240822",
     "types-PyAutoGUI>=0.9.3.7",
+    "windows-capture==2.0.0",
+    "numpy",
 ]
+
