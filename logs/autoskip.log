@@ -1,0 +1,32 @@
+[2026-10-11 05:42:58] transient press test duration=45ms
+[2026-10-11 14:14:43] transient press (<100ms): 75ms, pressed=False, triggers=marker, auto -> saved transient_20261011_141442_970_75ms.png
+[2026-10-11 14:38:48] transient press (<100ms): 68ms, pressed=False, triggers=marker -> saved transient_20261011_143848_188_68ms.png
+[2026-10-11 14:38:48] transient press (<100ms): 68ms, pressed=False, triggers=marker -> saved transient_20261011_143848_481_68ms.png
+[2026-10-11 20:56:24] humanising break 5.2s (not pressing)
+[2026-10-12 23:10:36] humanising break 4.0s (not pressing)
+[2026-10-12 23:19:16] transient press (<100ms): 63ms, pressed=False, triggers=marker -> saved transient_20261012_231916_955_63ms.png
+[2026-10-13 03:12:09] humanising break 4.3s (not pressing)
+[2026-10-13 03:24:43] humanising break 3.8s (not pressing)
+[2026-10-13 03:29:46] humanising break 6.8s (not pressing)
+[2026-10-13 03:34:11] humanising break 5.4s (not pressing)
+[2026-10-13 04:20:16] humanising break 6.8s (not pressing)
+[2026-10-13 04:52:48] humanising break 5.7s (not pressing)
+[2026-10-13 05:13:44] humanising break 7.1s (not pressing)
+[2026-10-13 11:51:38] transient press (<100ms): 67ms, pressed=False, triggers=box -> saved transient_20261013_115138_408_67ms.png
+[2026-10-13 12:07:05] transient press (<100ms): 80ms, pressed=False, triggers=marker, auto -> saved transient_20261013_120705_729_80ms.png
+[2026-10-13 12:12:57] transient press (<100ms): 72ms, pressed=False, triggers=box, auto -> saved transient_20261013_121257_451_72ms.png
+[2026-10-13 12:15:48] transient press (<100ms): 71ms, pressed=False, triggers=box -> saved transient_20261013_121548_811_71ms.png
+[2026-10-13 12:15:51] transient press (<100ms): 72ms, pressed=False, triggers=box -> saved transient_20261013_121551_529_72ms.png
+[2026-10-13 12:15:54] transient press (<100ms): 70ms, pressed=False, triggers=box -> saved transient_20261013_121554_266_70ms.png
+[2026-10-13 12:15:54] transient press (<100ms): 67ms, pressed=False, triggers=box -> saved transient_20261013_121554_686_67ms.png
+[2026-10-13 12:15:59] transient press (<100ms): 73ms, pressed=False, triggers=box -> saved transient_20261013_121559_192_73ms.png
+[2026-10-13 12:49:54] transient press (<100ms): 69ms, pressed=False, triggers=marker -> saved transient_20261013_124953_954_69ms.png
+[2026-10-13 12:49:54] transient press (<100ms): 65ms, pressed=False, triggers=marker -> saved transient_20261013_124954_630_65ms.png
+[2026-10-13 12:50:01] transient press (<100ms): 68ms, pressed=False, triggers=marker -> saved transient_20261013_125001_374_68ms.png
+[2026-10-13 12:52:28] transient press (<100ms): 73ms, pressed=False, triggers=marker -> saved transient_20261013_125228_012_73ms.png
+[2026-10-13 13:00:33] transient press (<100ms): 87ms, pressed=False, triggers=marker, auto -> saved transient_20261013_130033_214_87ms.png
+[2026-10-13 13:01:30] humanising break 5.8s (not pressing)
+[2026-10-13 13:06:22] transient press (<100ms): 69ms, pressed=False, triggers=box -> saved transient_20261013_130622_108_69ms.png
+[2026-10-14 03:07:55] transient press (<100ms): 65ms, pressed=False, triggers=marker -> saved transient_20261014_030755_426_65ms.png
+[2026-10-14 03:11:26] transient press (<100ms): 64ms, pressed=False, triggers=box -> saved transient_20261014_031126_088_64ms.png
+[2026-10-14 03:15:13] transient press (<100ms): 63ms, pressed=False, triggers=box -> saved transient_20261014_031513_161_63ms.png
