@@ -78,3 +78,13 @@ fabric.properties
 
 # .env file holding user's screen resolution
 .env
+
+# Scratch / WIP directory
+.wip/
+
+# Runtime logs & debug captures
+logs/*.png
+
+# Python
+__pycache__/
+*.py[cod]

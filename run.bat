@@ -7,13 +7,9 @@ pushd "%~dp0"
 echo Checking admin privileges...
 net session >nul 2>&1
 if %errorlevel% neq 0 (
-    color 0C
-    echo.
-    echo [ERROR] This script requires Administrator privileges!
-    echo.
-    echo Please right-click run.bat and select "Run as administrator"
-    echo.
-    goto end
+    echo [INFO] Elevating privileges to Administrator...
+    powershell -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    exit /b
 )
 color 0A
 echo [OK] Running with Administrator privileges
@@ -123,11 +119,7 @@ goto end
 :: Run the Script
 :: ============================================
 :run_script
-color 0B
-echo ============================================
-echo Running Genshin Dialogue Auto-Skip...
-echo ============================================
-echo.
+mode con: cols=54 lines=22
 color 0F
 
 :: Final verification before running
