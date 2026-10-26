@@ -158,8 +158,10 @@ def get_coords(w: int, h: int) -> Dict[str, Any]:
     aspect = w / h if h > 0 else 16.0 / 9.0
     if aspect <= 16.0 / 9.0:
         ui_scale = w / 1920.0
+        x_offset = 0
     else:
         ui_scale = h / 1080.0
+        x_offset = int((w - 1920.0 * ui_scale) / 2.0)
 
     # ── Autoplay pill (top-left "Auto" toggle) ───────────────────────────
     # Lit pill means autoplay is ON. Unlit means autoplay is off or has been
@@ -174,8 +176,8 @@ def get_coords(w: int, h: int) -> Dict[str, Any]:
     # that actually means "there is dialogue on screen to skip".
     # y >= 890 excludes the gold speaker name (845..890) and the reply-option
     # pills (700..830). x <= 1745 excludes the UID watermark (1740..1900).
-    dialogue_text_x0 = int(180 * ui_scale)
-    dialogue_text_x1 = int(1745 * ui_scale)
+    dialogue_text_x0 = x_offset + int(180 * ui_scale)
+    dialogue_text_x1 = x_offset + int(1745 * ui_scale)
     dialogue_text_y0 = int(890 * ui_scale)
     dialogue_text_y1 = int(1022 * ui_scale)
 
@@ -198,6 +200,7 @@ def get_coords(w: int, h: int) -> Dict[str, Any]:
 
     return {
         "ui_scale": ui_scale,
+        "x_offset": x_offset,
         "autoplay_x0": autoplay_x0,
         "autoplay_x1": autoplay_x1,
         "autoplay_y0": autoplay_y0,
@@ -237,6 +240,11 @@ def take_random_break() -> float:
 # ── Notification sound ─────────────────────────────────────────
 
 NOTIFY_SOUND_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notify.mp3")
+LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+
+# The "dialogue finished" chime means the bot has stopped working and it is
+# your turn again, so it must not land while presses are still going out.
+NOTIFY_QUIET_SECONDS = 10.0
 
 def play_notification_sound() -> None:
     try:
@@ -309,9 +317,18 @@ def is_advance_marker_visible(arr: Any, coords: dict) -> bool:
     """
     try:
         height, width = arr.shape[:2]
-        s = coords.get("ui_scale", width / 1920.0)
+        aspect = width / height if height > 0 else 16.0 / 9.0
+        s = coords.get("ui_scale", (width / 1920.0) if aspect <= 16.0 / 9.0 else (height / 1080.0))
         hw = int(110 * s)
-        cx = int(_ADVANCE_CX * s)
+        # The diamond sits dead centre on 16:9, so _ADVANCE_CX is half of 1920.
+        # On ultrawide the game anchors UI to height and centres it on width,
+        # so this x must be width/2 - scaling the 1920-space constant by the
+        # height-based scale instead put the probe at x=1280 on a 3440-wide
+        # window while the diamond sat at x=1720, scoring a hard 0.000 and
+        # silently disabling the marker gate. Same convention as the choice
+        # column in is_dialogue_choice_visible.
+        cx = (int(_ADVANCE_CX * s) if aspect <= 16.0 / 9.0
+              else int(round(width / 2 + (_ADVANCE_CX - 960.0) * s)))
         cy = int(_ADVANCE_CY * s)
         rx0, rx1 = max(0, cx - hw), min(width, cx + hw)
         ry0, ry1 = max(0, cy - int(50 * s)), min(height, cy + int(50 * s))
@@ -374,8 +391,9 @@ def is_dialogue_box_visible(arr: Any, coords: dict) -> bool:
         # -- 3. gold nameplate rule ---------------------------------------
         ry0 = max(0, int(820 * s))
         ry1 = min(height, int(895 * s))
-        rx0 = int(200 * s)
-        rx1 = min(width, int(1740 * s))
+        x_offset = coords.get("x_offset", 0)
+        rx0 = x_offset + int(200 * s)
+        rx1 = min(width, x_offset + int(1650 * s))
         if ry1 - ry0 < 8 or rx1 - rx0 < 16:
             return False
         rule = arr[ry0:ry1, rx0:rx1]
@@ -383,8 +401,7 @@ def is_dialogue_box_visible(arr: Any, coords: dict) -> bool:
         rg = rule[:, :, 1].astype(np.int16)
         rr = rule[:, :, 2].astype(np.int16)
         gold = (rr >= 170) & (rg >= 100) & (rb <= 130) & ((rr - rb) >= 70) & (rr >= rg) & (rg >= rb)
-        if int(gold.sum(axis=1).max()) < 25 * s:
-            return False
+        max_gold = int(gold.sum(axis=1).max()) if rule.size else 0
 
         # -- 1 + 2. dialogue body text ------------------------------------
         strip = arr[y0:y1, x0:x1]
@@ -395,8 +412,15 @@ def is_dialogue_box_visible(arr: Any, coords: dict) -> bool:
         g = strip[:, :, 1]
         r = strip[:, :, 2]
         white = (r >= 232) & (g >= 232) & (b >= 232)
-        if int(np.count_nonzero(white)) < 1500 * s * s:
-            return False
+        white_cnt = int(np.count_nonzero(white))
+
+        ys, xs = np.where(white)
+        if len(xs):
+            mean_x = xs.mean() + x0
+            center_x = width / 2.0
+            if abs(mean_x - center_x) > 95.0 * s:
+                if not is_dialogue_choice_visible(arr, coords):
+                    return False
 
         max_run = 0
         limit = 150 * s
@@ -413,7 +437,16 @@ def is_dialogue_box_visible(arr: Any, coords: dict) -> bool:
             max_run = max(max_run, int((ends - starts + 1).max()))
             if max_run >= limit:
                 return False
-        return True
+
+        # When a prominent gold nameplate rule is present (named speaker like Paimon),
+        # short dialogue lines (e.g. "Hehehe...") measure ~960px at 1080p, so accept >= 600 * s * s.
+        # When no prominent nameplate rule is present (monologue / unnamed speaker),
+        # require >= 1400 * s * s and the base gold rule (>= 20 * s).
+        if white_cnt >= int(1400 * s * s):
+            return max_gold >= int(20 * s)
+        elif white_cnt >= int(600 * s * s):
+            return max_gold >= int(60 * s)
+        return False
     except Exception:
         return False
 
@@ -502,6 +535,40 @@ def find_f_keycap(arr: Any, coords: dict) -> Optional[tuple]:
         return None
 
 
+def is_dialogue_choice_visible(arr: Any, coords: dict) -> bool:
+    """Is a dialogue reply choice prompt [F] visible in the choice column?
+
+    Dialogue reply options appear strictly in the choice column on the right
+    (cx ≈ 1228 at 1080p, or centered offset on ultrawide), accompanied by
+    a speech bubble icon or option pill badge.
+    """
+    try:
+        height, width = arr.shape[:2]
+        aspect = width / height
+        s = coords.get("ui_scale", (width / 1920.0) if aspect <= 16.0 / 9.0 else (height / 1080.0))
+        res = find_f_keycap(arr, coords)
+        if not res:
+            return False
+        cx, cy, sc = res
+        if sc < 0.80:
+            return False
+        expected_choice_x = int(round(1228 * s)) if aspect <= 16.0 / 9.0 else int(round(width / 2 + 268 * (height / 1080.0)))
+        if abs(cx - expected_choice_x) > max(12, int(15 * s)):
+            return False
+        # Check speech bubble / choice icon to the right of the [F] keycap
+        r_y0 = max(0, int(cy - 16 * s))
+        r_y1 = min(height, int(cy + 16 * s))
+        r_x0 = max(0, int(cx + 18 * s))
+        r_x1 = min(width, int(cx + 55 * s))
+        bubble_crop = arr[r_y0:r_y1, r_x0:r_x1]
+        if bubble_crop.size == 0:
+            return False
+        white_px = np.sum(np.all(bubble_crop > 215, axis=2))
+        return white_px >= int(25 * s * s)
+    except Exception:
+        return False
+
+
 def is_interact_prompt_visible(arr: Any, coords: dict, box_visible: bool = True) -> bool:
     """An [F] keycap is showing for a *world* interaction, not for dialogue.
 
@@ -510,23 +577,18 @@ def is_interact_prompt_visible(arr: Any, coords: dict, box_visible: bool = True)
     targeted interactions (Katheryne services and so on) that are planned but
     not implemented yet.
 
-    Note the keycap alone cannot tell a world interaction from a dialogue reply:
-    both score 0.96+ on the same template. Only the dialogue box can, which is
-    why this returns False whenever a dialogue is up.
+    World interaction prompts appear near the screen centre (cx ≈ 1119 at 1080p),
+    unlike dialogue reply choices which sit in the fixed choice column (cx ≈ 1228)
+    with speech bubble icons.
     """
     if box_visible:
         return False
     try:
+        if is_dialogue_choice_visible(arr, coords):
+            return False
         return find_f_keycap(arr, coords) is not None
     except Exception:
         return False
-
-
-def is_user_providing_input() -> bool:
-    for vk in (0x57, 0x41, 0x53, 0x44, 0x20, 0x10, 0x01, 0x02):
-        if win32api.GetAsyncKeyState(vk) & 0x8000:
-            return True
-    return False
 
 
 # Anything a player would plausibly press while driving. If any of these is
@@ -548,9 +610,32 @@ USER_YIELD_SECONDS = 1.5
 _last_user_input = 0.0
 
 
-def note_user_input(now: float) -> None:
-    """Remember when the player last touched the keyboard or mouse."""
+def is_user_providing_input() -> bool:
+    for vk in _USER_INPUT_VKS:
+        if win32api.GetAsyncKeyState(vk) & 0x8000:
+            return True
+    return False
+
+
+def note_user_input(now: float, game_focused: bool = True) -> None:
+    """Remember when the player last touched the keyboard or mouse.
+
+    Only meaningful while the game actually has focus. GetAsyncKeyState is a
+    *global* poll - it reports keys held in any application, with no regard for
+    which window is foreground. Sampling it unconditionally meant that typing
+    in chat, clicking on the desktop, or working in the very terminal running
+    this bot all registered as "the player is driving", and the bot stood down
+    for 1.5s after every stray keystroke even with the game in the background.
+    That presented as random stalls: the verdict still read "pressing F" while
+    the counter stood still, and it recovered on its own once the player
+    stopped typing.
+
+    Outside the game there is nothing to yield to - the character cannot be
+    moved by input aimed at another window - so the poll is skipped entirely.
+    """
     global _last_user_input
+    if not game_focused:
+        return
     if is_user_providing_input():
         _last_user_input = now
 
@@ -585,130 +670,137 @@ def _report_input_error(exc: Exception) -> None:
         print(msg)
 
 
+def game_has_focus(hwnd: int) -> bool:
+    """True when the OS foreground belongs to the game, popups included.
+
+    Comparing GetForegroundWindow() == hwnd is not enough. The foreground
+    window is whatever window owns input right now, and that is frequently a
+    *child* or *owned popup* of the game rather than the game window itself:
+    right-clicking inside Genshin pops a cursor-confine/tooltip/shell window,
+    and a foreground-flash from the taskbar does the same.
+
+    Missing those is what locks the player out. A strict compare answers
+    "background" while the player is literally tabbed into the game, so the
+    bot primes the window as active, presses F, then hands the window back
+    inactive - WM_KILLFOCUS to a window Windows still believes is foreground.
+    Unity then drops every keystroke and mouse click until the user alt-tabs
+    out and back in. Right-click was the reliable way to trigger it.
+
+    GA_ROOTOWNER also covers owned popups (menus, dialogs); GA_ROOT covers
+    plain children. Either match means the game owns the foreground.
+    """
+    if not hwnd:
+        return False
+    try:
+        fg = win32gui.GetForegroundWindow()
+    except Exception:
+        return False
+    if not fg or fg == hwnd:
+        return bool(fg)
+    for flag in (win32con.GA_ROOTOWNER, win32con.GA_ROOT):
+        try:
+            if win32gui.GetAncestor(fg, flag) == hwnd:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _activation_messages(hwnd: int, active: bool) -> None:
     """Walk the game's WndProc through an activate/deactivate cycle.
 
-    This is the priming that makes injected keys land. It is NOT
-    SetForegroundWindow - no OS focus is taken, so you keep whatever window you
-    were using. Measured live: PostMessage on its own does nothing, PostMessage
-    after this cycle works (band delta 14-46 vs 0.3).
+    This is the priming that makes injected keys land when the game is in the
+    background. It is NOT SetForegroundWindow - no OS focus is taken, so you
+    keep whatever window you were using. Measured live: PostMessage on its own
+    does nothing in the background, PostMessage after this cycle works (band
+    delta 14-46 vs 0.3).
 
-    The deactivate half matters just as much. A game left believing it is
-    active holds the keyboard, and your own keystrokes stop reaching it - you
-    have to tab out and back in to reclaim control. So every press is bracketed
-    and the window is put back to inactive afterwards.
-
-    WM_ACTIVATE carries the state in wParam and the gaining/losing focus window
-    in lParam, so lParam is filled in properly rather than passed as 0.
+    Never call the inactive half on a window that currently has focus - see
+    game_has_focus() for why that locks the player out.
     """
     if active:
-        # lParam packs the state with the handle that gains focus
         win32gui.PostMessage(hwnd, win32con.WM_ACTIVATE,
-                             win32con.WA_ACTIVE, hwnd)
+                             win32con.WA_ACTIVE, 0)
         win32gui.PostMessage(hwnd, win32con.WM_SETFOCUS, 0, 0)
     else:
+        # WM_KILLFOCUS before WM_ACTIVATE(WA_INACTIVE), not the other way
+        # round. Unity tears down its input pump on kill-focus and only
+        # rebuilds it on the activate that follows, so this ordering is what
+        # leaves the window cleanly inert while the user works elsewhere.
         win32gui.PostMessage(hwnd, win32con.WM_KILLFOCUS, 0, 0)
-        # WA_INACTIVE = 0, so wParam is 0 and lParam is the handle losing focus
         win32gui.PostMessage(hwnd, win32con.WM_ACTIVATE,
-                             win32con.WA_INACTIVE, hwnd)
+                             win32con.WA_INACTIVE, 0)
 
 
-def press_f_background(hwnd: int, is_active: bool) -> None:
+def _reactivate(hwnd: int) -> None:
+    """Re-sync a focused game window that a previous press left inert.
+
+    Each background press ends with WM_KILLFOCUS + WM_ACTIVATE(WA_INACTIVE),
+    so between presses the game's WndProc believes it has no focus. Alt-tabbing
+    back in makes Windows send its own WM_ACTIVATE(WA_ACTIVE) + WM_SETFOCUS,
+    which normally repairs that - but not reliably. When the repair misses,
+    the game is genuinely foreground while its input pump stays torn down, and
+    the symptom is the worst kind: your keystrokes and clicks go nowhere and
+    only tabbing out and back in brings them back.
+
+    So on the foreground transition, send the activate pair again ourselves.
+    It is cheap, it is what Windows just sent anyway, and it is idempotent:
+    the window really is focused, so we are not lying to the WndProc the way
+    the deactivate half does. This is the difference between "alt-tab in and
+    it works" and "alt-tab in and you are a ghost until you alt-tab twice".
+    """
+    win32gui.PostMessage(hwnd, win32con.WM_ACTIVATE,
+                         win32con.WA_ACTIVE, 0)
+    win32gui.PostMessage(hwnd, win32con.WM_SETFOCUS, 0, 0)
+
+
+def press_f_background(hwnd: int, is_active: Optional[bool] = None) -> None:
     """Send F to the game window by PostMessage only.
 
     Background operation: the key goes to the Genshin hwnd directly and the OS
     focus is never taken, so you can keep using the machine while the bot runs.
     keybd_event()/SendInput() are deliberately NOT used - they inject into
-    whatever the OS considers focused, which is how presses land on this
-    console instead of the game.
+    whatever the OS considers focused, which is how presses land on other windows.
 
-    Must run at the same elevation as the game or UIPI refuses every message.
-    That failure is reported rather than swallowed - a silently ignored denial
-    looks exactly like "the bot is working".
+    Focus safety (see game_has_focus for the why). The two halves of the
+    priming cycle are NOT equally dangerous, and treating them as one thing is
+    what broke both "skip in background" and "play in foreground":
+
+    - The activate half (WM_ACTIVATE(WA_ACTIVE) + WM_SETFOCUS) is what makes
+      the key actually land. Measured live, bare PostMessage does nothing even
+      when the window is foreground; the primed press works. It is also
+      idempotent here: when the window really is foreground we are repeating
+      what Windows already did, not inventing a new state. So it is sent
+      unconditionally, on every press.
+    - The deactivate half (WM_KILLFOCUS + WM_ACTIVATE(WA_INACTIVE)) is the
+      only genuinely destructive part. It tears down Unity's input pump. Sent
+      to a window the OS still considers foreground, it leaves the game
+      looking active while being functionally dead - WASD and mouse stop
+      responding until the user alt-tabs out and back in. So it is sent only
+      when the game is genuinely in the background, and it is re-checked
+      immediately before sending, because focus can change during the press
+      (a right-click or an alt-tab landing mid-press is enough).
     """
+    # The caller's hint is only a hint. Focus can change between the check in
+    # the main loop and here, and the deactivate half is the part that does
+    # real damage, so re-derive the truth here rather than trusting it.
+    is_active = game_has_focus(hwnd)
+
     scan_code = 0x21
     lparam_down = 1 | (scan_code << 16)
     lparam_up = lparam_down | (1 << 30) | (1 << 31)
     try:
-        # activate -> key -> deactivate, all as messages. The window is handed
-        # back inactive every time so it never holds the keyboard hostage.
+        # Prime unconditionally - this is what makes the key land.
         _activation_messages(hwnd, True)
         sleep(0.03)
         win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, 0x46, lparam_down)
         sleep(0.04)
         win32gui.PostMessage(hwnd, win32con.WM_KEYUP, 0x46, lparam_up)
         sleep(0.03)
-        _activation_messages(hwnd, False)
-    except Exception as exc:  # noqa: BLE001
-        _report_input_error(exc)
-
-
-_input_error_reported = False
-
-
-def _report_input_error(exc: Exception) -> None:
-    """Surface injection failures once - a silent denial looks like success."""
-    global _input_error_reported
-    if _input_error_reported:
-        return
-    _input_error_reported = True
-    try:
-        is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception:
-        is_admin = False
-    msg = f"input failed: {exc}"
-    if "denied" in str(exc).lower() or getattr(exc, "winerror", None) == 5:
-        msg += " - this usually means the script is not running as administrator. "
-        msg += "run.bat requests elevation; UIPI blocks all input to the game otherwise."
-    elif not is_admin:
-        msg += " - script is not elevated; run.bat requests administrator rights."
-    try:
-        app.log(msg)
-    except Exception:
-        print(msg)
-
-
-def prime_window_input(hwnd: int) -> None:
-    """Tell the game's own window proc it is active, without touching OS focus.
-
-    This is the crucial bit and it is NOT the same as SetForegroundWindow.
-    SetForegroundWindow really takes focus away from whatever you are using.
-    PostMessage(WM_ACTIVATE) only walks the game's WndProc, which is what makes
-    it start consuming injected key messages. Measured live: PostMessage alone
-    does nothing, PostMessage after this priming works.
-
-    The game is left marked inactive afterwards, so the bot never holds focus.
-    """
-    try:
-        win32gui.PostMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
-    except Exception as exc:  # noqa: BLE001
-        _report_input_error(exc)
-
-
-def press_f_background(hwnd: int, is_active: bool) -> None:
-    """Send F to the game window by PostMessage only.
-
-    Background operation: the key goes to the Genshin hwnd directly and the OS
-    focus is never taken, so you can keep using the machine while the bot runs.
-    keybd_event()/SendInput() are deliberately NOT used - they inject into
-    whatever the OS considers focused, which is how presses land on this
-    console instead of the game.
-
-    Must run at the same elevation as the game or UIPI refuses every message.
-    That failure is reported rather than swallowed - a silently ignored denial
-    looks exactly like "the bot is working".
-    """
-    scan_code = 0x21
-    lparam_down = 1 | (scan_code << 16)
-    lparam_up = lparam_down | (1 << 30) | (1 << 31)
-    try:
-        win32gui.PostMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
-        sleep(0.03)
-        win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, 0x46, lparam_down)
-        sleep(0.04)
-        win32gui.PostMessage(hwnd, win32con.WM_KEYUP, 0x46, lparam_up)
-        sleep(0.03)
-        win32gui.PostMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_INACTIVE, 0)
+        # Hand the window back inert only if it is still in the background.
+        # Never tear down the input pump of a window the player is using.
+        if not is_active and not game_has_focus(hwnd):
+            _activation_messages(hwnd, False)
     except Exception as exc:  # noqa: BLE001
         _report_input_error(exc)
 
@@ -728,6 +820,34 @@ def is_paimon_visible(arr: Any, coords: dict) -> bool:
         return False
 
 
+def is_overworld_active(arr: Any, coords: dict) -> bool:
+    """Check if open-world HUD elements (player HP bar) are visible.
+
+    In Genshin Impact, the overworld HUD (HP bar, elemental skill icons) is
+    strictly hidden during dialogue cutscenes and overlay menus. Its presence
+    indicates the player is walking around or in combat in the overworld.
+    """
+    try:
+        height, width = arr.shape[:2]
+        s = height / 1080.0
+        y0 = int(1000 * s)
+        y1 = min(height, int(1025 * s))
+        x0 = int(width / 2.0 - 210 * s)
+        x1 = min(width, int(width / 2.0 + 210 * s))
+        crop = arr[y0:y1, x0:x1]
+        if crop.size > 0:
+            b = crop[:, :, 0].astype(int)
+            g = crop[:, :, 1].astype(int)
+            r = crop[:, :, 2].astype(int)
+            # Lime green player HP bar
+            lime = (g >= 175) & (r <= 180) & (b <= 110) & (g - r >= 35) & (g - b >= 60)
+            if np.sum(lime) >= int(100 * s * s):
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def is_map_open(arr: Any, coords: dict) -> bool:
     try:
         height, width = arr.shape[:2]
@@ -735,19 +855,42 @@ def is_map_open(arr: Any, coords: dict) -> bool:
         gx, gy = coords["map_gear_x"], coords["map_gear_y"]
         cx, cy = coords["map_close_x"], coords["map_close_y"]
 
-        # 1. Check gear icon in bottom-left (warm white (236, 229, 216))
-        gear_hit = False
-        for dy in range(-2, 3):
-            for dx in range(-2, 3):
-                if check_pixel(arr, gx + dx, gy + dy, (236, 229, 216), tolerance=12):
-                    gear_hit = True
-                    break
-            if gear_hit:
-                break
-        if not gear_hit:
+        # 1. Gear icon must be present *and* shaped like a glyph, not just be
+        # "a warm-white pixel somewhere near here".
+        #
+        # The old test was a bare warm-white pixel check, which any bright sky
+        # satisfies. A Fontaine cutscene with the camera tilted up scores 441
+        # warm-white pixels in this patch, reads as an open map, sets d_menu,
+        # and silently stops dialogue skipping. The real gear is a glyph: a
+        # compact set of bright strokes on a dark surround, so it is a minority
+        # of its patch and has strong local contrast. Measured on the false
+        # positive vs a real map: 441 warm px at local stddev 0.7 (flat sky)
+        # against 105 warm px at stddev 70 (actual icon). Density and contrast
+        # each reject flat scenery, and requiring both also rejects bright
+        # textured rock.
+        if not check_pixel(arr, gx, gy, (236, 229, 216), tolerance=12):
+            return False
+        v = max(6, int(10 * s))
+        x0, x1 = max(0, gx - v), min(width, gx + v + 1)
+        y0, y1 = max(0, gy - v), min(height, gy + v + 1)
+        patch = arr[y0:y1, x0:x1]
+        if patch.size == 0:
+            return False
+        warm = (patch[:, :, 2] > 224) & (patch[:, :, 1] > 217) & (patch[:, :, 0] < 232)
+        warm_count = int(warm.sum())
+        if warm_count == 0:
+            return False
+        # An icon is a minority of its patch (strokes plus dark gaps); flat
+        # bright scenery fills the whole thing.
+        if warm_count > int(0.55 * patch.shape[0] * patch.shape[1]):
+            return False
+        # ...and it has internal structure rather than being a smooth gradient.
+        if cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY).astype(np.float32).std() < 18.0:
             return False
 
-        # 2. Check close/x icon in top-right (circular button with warm white rim)
+        # 2. Close button rim in top-right (circular button with warm white
+        # rim). All four cardinal points are required, not three of four: the
+        # sky false positive scored exactly 3/4.
         r = max(8, int(18 * s))
         close_hits = 0
         for ox, oy in [(0, -r), (0, r), (-r, 0), (r, 0)]:
@@ -762,7 +905,7 @@ def is_map_open(arr: Any, coords: dict) -> bool:
             if hit:
                 close_hits += 1
 
-        return close_hits >= 3
+        return close_hits == 4
     except Exception:
         return False
 
@@ -1020,7 +1163,48 @@ def is_events_open(arr: Any, coords: dict) -> bool:
         return False
 
 
+def _glyph_plate(arr: Any, width: int, height: int, px: int, py: int,
+                 half: int, min_warm_frac: float, min_stddev: float) -> bool:
+    """Does a top-bar icon actually *look like an icon* here?
+
+    Genshin's top-bar buttons are always a glyph on a plate, never a flat
+    wash. Sampling four isolated warm-white pixels therefore cannot tell an
+    icon from any bright background behind it - a character splash load
+    screen is near-white end to end and scored 4/4 on every probe.
+
+    This asks two questions of the surrounding patch instead:
+      * is any of it warm white at all (an icon is drawn in the UI's cream
+        ink, so a patch with none of it is not this UI), and
+      * does it have internal structure (an icon has dark strokes and gaps;
+        a flat splash does not).
+    """
+    x0, x1 = max(0, px - half), min(width, px + half + 1)
+    y0, y1 = max(0, py - half), min(height, py + half + 1)
+    pad = arr[y0:y1, x0:x1]
+    if pad.size == 0:
+        return False
+    warm = (pad[:, :, 2] > 224) & (pad[:, :, 1] > 217) & (pad[:, :, 0] < 232)
+    if float(warm.sum()) / float(warm.size) < min_warm_frac:
+        return False
+    return float(cv2.cvtColor(pad, cv2.COLOR_BGR2GRAY).astype(np.float32).std()) >= min_stddev
+
+
 def is_party_setup_open(arr: Any, coords: dict) -> bool:
+    """Is the party setup / co-op screen open?
+
+    Two independent top-bar signals must both hold:
+
+    1. The back chevron at (w - 77, 48) must hit *all four* cardinal
+       samples. Three of four is matchable by any bright top-right corner -
+       the splash screen's magnifier icon scored exactly 3/4 against a real
+       back arrow's 4/4. The two glyphs are otherwise near-identical in
+       colour and local contrast, so count is the only thing separating them.
+    2. The filter glyph at (35, 48) must additionally look like a glyph.
+       On the white splash screen that patch is flat: local stddev 0.5 with
+       zero warm pixels, versus stddev 83 and 57% warm on the real filter
+       icon. A red party-invite badge bottom-left is accepted as an
+       alternative second signal, since that one is already colour-specific.
+    """
     try:
         height, width = arr.shape[:2]
         aspect = width / height
@@ -1042,7 +1226,7 @@ def is_party_setup_open(arr: Any, coords: dict) -> bool:
                     break
             if hit:
                 close_hits += 1
-        if close_hits < 3:
+        if close_hits != 4:
             return False
 
         # 2. Check either:
@@ -1054,7 +1238,8 @@ def is_party_setup_open(arr: Any, coords: dict) -> bool:
         for ox, oy in [(0, -fr), (0, fr), (-fr, 0), (fr, 0)]:
             if check_pixel(arr, fx + ox, fy + oy, (236, 229, 216), tolerance=20):
                 filter_hits += 1
-        if filter_hits >= 3:
+        if filter_hits >= 3 and _glyph_plate(arr, width, height, fx, fy,
+                                            fr + max(2, int(4 * s)), 0.15, 25.0):
             return True
 
         # b) Bottom-left red badge at (69*s, h - 61*s)
@@ -1115,6 +1300,22 @@ def is_escape_menu_open(arr: Any, coords: dict) -> bool:
 
 
 def is_handbook_open(arr: Any, coords: dict) -> bool:
+    """Detect the open Handbook/Archive book from its left-hand tab column.
+
+    The tabs are six *saturated* coloured chips stacked in a fixed column:
+    green Experience, purple Commissions, cyan Domains, peach Enemies,
+    gold Guide, teal Embattle. Exactly one of them - the selected page - is
+    swapped for a cream highlight.
+
+    Both facts are load-bearing. Accepting the cream highlight as evidence on
+    its own is what used to fire on open-world scenery: pale stone and paving
+    are bright and near-neutral (measured saturation 0.04-0.07), so every tab
+    probe "hit" at once and d_menu went True on bright Fontaine ground, which
+    silently killed dialogue detection until you walked somewhere darker. A
+    real tab column measures 0.37-0.67 saturation, and at most one tab is ever
+    cream, so the two-sided test (many saturated chips, at most one cream)
+    separates the book from scenery without depending on scenery being dark.
+    """
     try:
         height, width = arr.shape[:2]
         s = coords.get("ui_scale", width / 1920.0)
@@ -1127,12 +1328,13 @@ def is_handbook_open(arr: Any, coords: dict) -> bool:
 
         tab_y_offsets = [-307, -200, -93, 13, 120, 213]
 
-        def is_active(r: int, g: int, b: int) -> bool:
+        def is_cream(r: int, g: int, b: int) -> bool:
+            # The selected-tab highlight. Bright and near-neutral.
             return r > 190 and g > 180 and b > 165 and abs(r - g) <= 25
 
-        def check_tab_color(idx: int, r: int, g: int, b: int) -> bool:
-            if is_active(r, g, b):
-                return True
+        def is_chip(idx: int, r: int, g: int, b: int) -> bool:
+            # The unselected tab fill for this row. Hue-specific, because a
+            # generic "saturated" test also fires on coloured scenery.
             if idx == 0:    # Experience (Green)
                 return g > r + 15 and g > b + 20 and g > 60
             elif idx == 1:  # Commissions (Purple)
@@ -1147,30 +1349,41 @@ def is_handbook_open(arr: Any, coords: dict) -> bool:
                 return g > r + 25 and b > r + 25 and g > 60
             return False
 
-        tab_hits = 0
+        chip_hits = 0
+        cream_hits = 0
         for idx, y_off in enumerate(tab_y_offsets):
             ty = cy + int(y_off * s)
             if not (0 <= ty < height):
                 continue
-            hit = False
             for dx in range(-2, 3):
                 px = tx + dx
-                if 0 <= px < width:
-                    b_pix, g_pix, r_pix = int(arr[ty, px][0]), int(arr[ty, px][1]), int(arr[ty, px][2])
-                    if check_tab_color(idx, r_pix, g_pix, b_pix):
-                        hit = True
-                        break
-            if hit:
-                tab_hits += 1
+                if not (0 <= px < width):
+                    continue
+                b_pix, g_pix, r_pix = int(arr[ty, px][0]), int(arr[ty, px][1]), int(arr[ty, px][2])
+                if is_chip(idx, r_pix, g_pix, b_pix):
+                    chip_hits += 1
+                    break
+            else:
+                # Not a coloured chip - only the one selected tab may be cream.
+                for dx in range(-2, 3):
+                    px = tx + dx
+                    if 0 <= px < width:
+                        b_pix, g_pix, r_pix = int(arr[ty, px][0]), int(arr[ty, px][1]), int(arr[ty, px][2])
+                        if is_cream(r_pix, g_pix, b_pix):
+                            cream_hits += 1
+                            break
 
-        page_hit = False
-        page_x = cx - int(200 * s)
-        if 0 <= page_x < width and 0 <= cy < height:
-            pb, pg, pr = int(arr[cy, page_x][0]), int(arr[cy, page_x][1]), int(arr[cy, page_x][2])
-            if pr > 195 and pg > 195 and pb > 185:
-                page_hit = True
-
-        return tab_hits >= 5 and page_hit
+        # Five saturated chips (the selected one is cream, so five of six
+        # saturated plus at most one cream) is the whole test. Measured across
+        # every screenshot on hand: all 6 real handbooks score chip=6/cream=1,
+        # and nothing else comes close - open-world scenes score chip<=2.
+        #
+        # An earlier version also required a "bright page" probe at
+        # (cx-200, cy). It was pure downside: bright stone passed it, and two
+        # genuine handbook pages with map/tinted content failed it, so it
+        # produced false positives and false negatives while discriminating
+        # nothing. The chip column alone is specific.
+        return chip_hits >= 5 and cream_hits <= 1
     except Exception:
         return False
 
@@ -1200,60 +1413,36 @@ _KATHERYNE_ICON_B64 = (
     "/wCBGN6r"
 )
 
-_KATHERYNE_WORD_B64 = (
-    "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"
-)
-
 _KATHERYNE_ICON_TPL = np.frombuffer(zlib.decompress(base64.b64decode(_KATHERYNE_ICON_B64)), dtype=np.uint8).reshape((48, 48))
-_KATHERYNE_WORD_TPL = np.frombuffer(zlib.decompress(base64.b64decode(_KATHERYNE_WORD_B64)), dtype=np.uint8).reshape((35, 205))
 
 
 def is_katheryne_menu_open(arr: Any, coords: dict) -> bool:
+    """Detect whether Katheryne's service menu is open by matching the Daily Commission star icon."""
     try:
         height, width = arr.shape[:2]
         aspect = width / height
         s = coords.get("ui_scale", (width / 1920.0) if aspect <= 16.0 / 9.0 else (height / 1080.0))
 
-        # 1. Check Commission Icon in choice column
+        # Check Daily Commission Star Icon in choice column
         icon_size = max(16, int(round(48 * s)))
         tpl_icon = cv2.resize(_KATHERYNE_ICON_TPL, (icon_size, icon_size), interpolation=cv2.INTER_AREA)
 
-        x1 = max(0, int(width * 0.60))
+        x1 = max(0, int(width * 0.58))
         x2 = min(width - 1, int(width * 0.75))
-        y1 = max(0, int(500 * s) - int(60 * s))
-        y2 = min(height - 1, int(860 * s) + int(60 * s))
+        y1 = max(0, int(300 * s))
+        y2 = min(height - 1, int(900 * s))
 
         crop_choices = arr[y1:y2, x1:x2]
-        if np.any(crop_choices > 215):
-            crop_gray = cv2.cvtColor(crop_choices, cv2.COLOR_BGR2GRAY)
-            if crop_gray.shape[0] >= icon_size and crop_gray.shape[1] >= icon_size:
-                res_icon = cv2.matchTemplate(crop_gray, tpl_icon, cv2.TM_CCOEFF_NORMED)
-                _, max_icon, _, _ = cv2.minMaxLoc(res_icon)
-                if max_icon >= 0.75:
-                    return True
+        if not np.any(crop_choices > 215):
+            return False
 
-        # 2. Check "Katheryne" speaker name in bottom center
-        cx = width // 2
-        sy1 = max(0, int(height - 250 * s))
-        sy2 = min(height - 1, int(height - 120 * s))
-        sx1 = max(0, int(cx - 180 * s))
-        sx2 = min(width - 1, int(cx + 180 * s))
+        crop_gray = cv2.cvtColor(crop_choices, cv2.COLOR_BGR2GRAY)
+        if crop_gray.shape[0] < icon_size or crop_gray.shape[1] < icon_size:
+            return False
 
-        crop_speaker = arr[sy1:sy2, sx1:sx2]
-        gold_mask = (crop_speaker[:, :, 2] > 190) & (crop_speaker[:, :, 1] > 130) & (crop_speaker[:, :, 0] < 90) & (crop_speaker[:, :, 2] > crop_speaker[:, :, 1])
-        if np.sum(gold_mask) > int(100 * s * s):
-            tpl_w = max(30, int(round(205 * s)))
-            tpl_h = max(10, int(round(35 * s)))
-            tpl_word = cv2.resize(_KATHERYNE_WORD_TPL, (tpl_w, tpl_h), interpolation=cv2.INTER_AREA)
-
-            crop_spk_gray = cv2.cvtColor(crop_speaker, cv2.COLOR_BGR2GRAY)
-            if crop_spk_gray.shape[0] >= tpl_h and crop_spk_gray.shape[1] >= tpl_w:
-                res_word = cv2.matchTemplate(crop_spk_gray, tpl_word, cv2.TM_CCOEFF_NORMED)
-                _, max_word, _, _ = cv2.minMaxLoc(res_word)
-                if max_word >= 0.75:
-                    return True
-
-        return False
+        res_icon = cv2.matchTemplate(crop_gray, tpl_icon, cv2.TM_CCOEFF_NORMED)
+        _, max_icon, _, _ = cv2.minMaxLoc(res_icon)
+        return max_icon >= 0.80
     except Exception:
         return False
 
@@ -1271,6 +1460,12 @@ class AppState:
         self.hwnd = 0
         self.notify_enabled = True
         self.on_top = False
+        # Why pressing is currently suppressed; "" when it is not. The verdict
+        # line used to claim "pressing F" unconditionally, so a deliberate
+        # pause and a stand-down for real player input were both invisible:
+        # the counter simply stopped moving and nothing on screen said why.
+        # This carries the reason so the TUI can state it out loud.
+        self.hold_reason = ""
 
     def log(self, msg):
         now = datetime.now().strftime("%H:%M:%S")
@@ -1328,7 +1523,7 @@ def poll_hotkeys() -> None:
 
 # ── TUI renderer ──────────────────────────────────────────────
 
-def render_tui(d_box, d_marker, d_auto, d_interact, d_paim, d_map, d_wish, d_set, d_mail, d_evnt, d_party, d_esc, d_book, d_kath, dialogue_active):
+def render_tui(d_box, d_marker, d_auto, d_interact, d_paim, d_map, d_wish, d_set, d_mail, d_evnt, d_party, d_esc, d_book, d_kath, dialogue_active, d_choice=False):
     now = datetime.now().strftime("%H:%M:%S")
     K = "\033[K"  # erase to end of line — prevents ghost text
 
@@ -1348,8 +1543,13 @@ def render_tui(d_box, d_marker, d_auto, d_interact, d_paim, d_map, d_wish, d_set
         # matter, so F is pressed the same way whether or not a choice is up.
         triggers = []
         if d_auto: triggers.append("autoplay")
+        if d_choice: triggers.append("reply option")
         tail = f" {GRY}({', '.join(triggers)}){R}" if triggers else ""
-        verdict = f" {BG_GRN}{B} SKIPPING {R}  {GRN}pressing F{R}{tail}"
+        if app.hold_reason:
+            # Do not claim "pressing F" while we are knowingly not pressing.
+            verdict = (f" {BG_YEL}{B} SKIPPING {R}  {YEL}{app.hold_reason}{R}{tail}")
+        else:
+            verdict = f" {BG_GRN}{B} SKIPPING {R}  {GRN}pressing F{R}{tail}"
     elif d_map:
         verdict = f" {BG_CYN}{B} MAP {R}  {CYN}map open{R}"
     elif d_wish:
@@ -1388,7 +1588,8 @@ def render_tui(d_box, d_marker, d_auto, d_interact, d_paim, d_map, d_wish, d_set
     L.append(f" f pressed {WHT}{app.f_presses}{R}{K}")
     L.append(f"{K}")
     L.append(f" dialogue  {'%s%sON%s' % (GRN, B, R) if d_box else '%s--%s' % (GRY, R)}{K}")
-    L.append(f" diamond  {'%s%sON%s' % (GRN, B, R) if d_marker else '%s--%s' % (GRY, R)}{K}")
+    L.append(f" diamond   {'%s%sON%s' % (GRN, B, R) if d_marker else '%s--%s' % (GRY, R)}{K}")
+    L.append(f" choice    {'%s%sON%s' % (GRN, B, R) if d_choice else '%s--%s' % (GRY, R)}{K}")
     L.append(f" autoplay  {'%s%sON%s' % (GRN, B, R) if d_auto else '%s--%s' % (GRY, R)}{K}")
     L.append(f" interact  {'%s%s--%s' % (YEL, GRY, R) if d_interact else '%s--%s' % (GRY, R)}{K}")
     L.append(f"{K}")
@@ -1410,7 +1611,7 @@ def render_tui_idle() -> str:
     can never break the paused path again.
     """
     return render_tui(False, False, False, False, False, False, False,
-                      False, False, False, False, False, False, False, False)
+                      False, False, False, False, False, False, False, False, False)
 
 
 # ── Main loop ──────────────────────────────────────────────────
@@ -1422,6 +1623,10 @@ def main() -> None:
 
     app.status = "pause"
     last_f_press = 0.0
+    # When a press was actually injected, as opposed to last_f_press which also
+    # advances when the bot stands down for the player. The chime is gated on
+    # this so holding WASD does not silence it forever.
+    last_f_sent = 0.0
     next_f_interval = random_f_key_interval()
     last_break_check = perf_counter()
     break_check_interval = 30.0
@@ -1431,9 +1636,7 @@ def main() -> None:
     last_coords_h = 0
     coords: Dict[str, int] = {}
     was_active = False
-    dialogue_inactive_start_time = 0.0
     dialogue_start_time = 0.0
-    restored_after_dialogue = True
     dialogue_was_active = False
     notification_played = True
 
@@ -1442,6 +1645,11 @@ def main() -> None:
     dialogue_active = False
     last_tui_render = 0.0
 
+    session_start_time = 0.0
+    session_frame = None
+    session_triggers: Dict[str, bool] = {}
+    session_f_pressed = False
+
     try:
         while True:
             current_time = perf_counter()
@@ -1449,21 +1657,7 @@ def main() -> None:
             # Handle pause
             if app.status == "pause":
                 hwnd = grabber.hwnd if grabber else win32gui.FindWindow("UnityWndClass", "Genshin Impact")
-                if hwnd and win32gui.GetForegroundWindow() == hwnd:
-                    win32gui.PostMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_INACTIVE, 0)
-                    win32gui.PostMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
-                    was_active = True
-                else:
-                    was_active = False
-
                 while app.status == "pause":
-                    if hwnd:
-                        is_active = (win32gui.GetForegroundWindow() == hwnd)
-                        if is_active and not was_active:
-                            win32gui.PostMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_INACTIVE, 0)
-                            win32gui.PostMessage(hwnd, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
-                        was_active = is_active
-
                     # Render TUI even while paused
                     now_t = perf_counter()
                     if now_t - last_tui_render >= 0.5:
@@ -1522,10 +1716,15 @@ def main() -> None:
                     continue
 
             # Focus management
-            is_active = (win32gui.GetForegroundWindow() == grabber.hwnd)
+            is_active = game_has_focus(grabber.hwnd)
+            # Background presses leave the game's WndProc believing it is
+            # inactive. Windows usually repairs that when the user tabs back
+            # in, but not always - and when it misses, the game is foreground
+            # with a dead input pump: the player tabs in and nothing responds.
+            # Re-send the activate pair on the transition, while we know the
+            # window really is focused. See _reactivate().
             if is_active and not was_active:
-                win32gui.PostMessage(grabber.hwnd, win32con.WM_ACTIVATE, win32con.WA_INACTIVE, 0)
-                win32gui.PostMessage(grabber.hwnd, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
+                _reactivate(grabber.hwnd)
             was_active = is_active
 
             if win32gui.IsIconic(grabber.hwnd):
@@ -1546,6 +1745,12 @@ def main() -> None:
                 app.log(f"calibrated {current_w}x{current_h}")
 
             # Detection
+            # d_ow first: the overworld HUD (HP bar) is hidden by every full
+            # screen menu, so a visible HP bar rules all of them out. Gating the
+            # menu probes on it is the cheap half of keeping open-world scenery
+            # out of the menu detectors; each probe still has to be correct on
+            # its own, which is why the handbook probe was fixed too.
+            d_ow = is_overworld_active(frame_arr, coords)
             d_map = is_map_open(frame_arr, coords)
             d_wish = is_wish_open(frame_arr, coords) if not d_map else False
             d_set = is_settings_open(frame_arr, coords) if (not d_map and not d_wish) else False
@@ -1553,7 +1758,7 @@ def main() -> None:
             d_evnt = is_events_open(frame_arr, coords) if (not d_map and not d_wish and not d_set and not d_mail) else False
             d_party = is_party_setup_open(frame_arr, coords) if (not d_map and not d_wish and not d_set and not d_mail and not d_evnt) else False
             d_esc = is_escape_menu_open(frame_arr, coords) if (not d_map and not d_wish and not d_set and not d_mail and not d_evnt and not d_party) else False
-            d_book = is_handbook_open(frame_arr, coords) if (not d_map and not d_wish and not d_set and not d_mail and not d_evnt and not d_party and not d_esc) else False
+            d_book = is_handbook_open(frame_arr, coords) if (not d_ow and not d_map and not d_wish and not d_set and not d_mail and not d_evnt and not d_party and not d_esc) else False
             d_kath = is_katheryne_menu_open(frame_arr, coords) if (not d_map and not d_wish and not d_set and not d_mail and not d_evnt and not d_party and not d_esc and not d_book) else False
             d_menu = d_map or d_wish or d_set or d_mail or d_evnt or d_party or d_esc or d_book or d_kath
             # The dialogue panel itself is the gate. An [F] keycap on its own is
@@ -1563,83 +1768,147 @@ def main() -> None:
             # brittle 9-pixel colour probe in the extreme top-left corner and
             # false-positives on bright scene content. Letting it suppress the
             # dialogue gate silently disables skipping.
-            d_box = (is_dialogue_box_visible(frame_arr, coords) if not d_menu else False)
+            d_box = (is_dialogue_box_visible(frame_arr, coords) if (not d_menu and not d_ow) else False)
             d_marker = (is_advance_marker_visible(frame_arr, coords) if not d_menu else False)
-            # Two independent routes to "there is dialogue here". The text band
-            # alone is thin against a bright scene, and the diamond alone only
-            # shows for part of a dialogue, so either one being true is enough.
-            d_auto = is_autoplay_enabled(frame_arr, coords) if (d_box or d_marker) else False
-            d_interact = is_interact_prompt_visible(frame_arr, coords, d_box or d_marker) if (not d_menu and not (d_box or d_marker)) else False
+            d_choice = (is_dialogue_choice_visible(frame_arr, coords) if not d_menu else False)
+            # Three independent routes to "there is dialogue here": the text band,
+            # the advance diamond, or a dialogue reply choice [F] prompt.
+            # Active open-world HUD (HP bar visible) suppresses false dialogue triggers.
+            dialogue_active = (d_box or d_marker or d_choice) and not d_ow
+            if not dialogue_active:
+                # Nothing to press, so no reason to be holding.
+                app.hold_reason = ""
+            d_auto = is_autoplay_enabled(frame_arr, coords) if dialogue_active else False
+            d_interact = is_interact_prompt_visible(frame_arr, coords, dialogue_active) if (not d_menu and not dialogue_active) else False
             d_paim = is_paimon_visible(frame_arr, coords) if not d_menu else False
-            dialogue_active = d_box or d_marker
 
             # Render TUI
             now_t = perf_counter()
             if now_t - last_tui_render >= 0.15:
                 last_tui_render = now_t
-                sys.stdout.write("\033[H" + render_tui(d_box, d_marker, d_auto, d_interact, d_paim, d_map, d_wish, d_set, d_mail, d_evnt, d_party, d_esc, d_book, d_kath, dialogue_active))
+                sys.stdout.write("\033[H" + render_tui(d_box, d_marker, d_auto, d_interact, d_paim, d_map, d_wish, d_set, d_mail, d_evnt, d_party, d_esc, d_book, d_kath, dialogue_active, d_choice))
                 sys.stdout.flush()
 
             # Dialogue state tracking
             if dialogue_active:
                 if dialogue_start_time == 0.0:
                     dialogue_start_time = current_time
-                dialogue_inactive_start_time = 0.0
+                    session_start_time = current_time
+                    session_frame = frame_arr.copy()
+                    session_triggers = {
+                        "box": d_box,
+                        "marker": d_marker,
+                        "choice": d_choice,
+                        "auto": d_auto,
+                    }
+                    session_f_pressed = False
                 if (current_time - dialogue_start_time) >= 0.4:
-                    restored_after_dialogue = False
                     dialogue_was_active = True
                     notification_played = False
             else:
+                if session_start_time > 0.0:
+                    session_duration = current_time - session_start_time
+                    if session_duration < 0.100 and (session_f_pressed or dialogue_start_time > 0.0):
+                        try:
+                            os.makedirs(LOGS_DIR, exist_ok=True)
+                            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:19]
+                            dur_ms = int(round(session_duration * 1000))
+                            fname = f"transient_{ts}_{dur_ms}ms.png"
+                            shot_path = os.path.join(LOGS_DIR, fname)
+                            if session_frame is not None:
+                                cv2.imwrite(shot_path, session_frame)
+                            trigger_str = ", ".join(k for k, v in session_triggers.items() if v) or "none"
+                            log_msg = f"transient press (<100ms): {dur_ms}ms, pressed={session_f_pressed}, triggers={trigger_str} -> saved {fname}"
+                            app.log(log_msg)
+                            with open(os.path.join(LOGS_DIR, "autoskip.log"), "a", encoding="utf-8") as lf:
+                                lf.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {log_msg}\n")
+                        except Exception as log_exc:
+                            app.log(f"log error: {log_exc}")
+                    session_start_time = 0.0
+                    session_frame = None
+
                 dialogue_start_time = 0.0
-                if dialogue_inactive_start_time == 0.0:
-                    dialogue_inactive_start_time = current_time
-                elif not restored_after_dialogue and (current_time - dialogue_inactive_start_time >= 0.5):
-                    is_fg = (win32gui.GetForegroundWindow() == grabber.hwnd)
-                    if is_fg and not is_user_providing_input():
-                        win32gui.PostMessage(grabber.hwnd, win32con.WM_ACTIVATE, win32con.WA_INACTIVE, 0)
-                        win32gui.PostMessage(grabber.hwnd, win32con.WM_ACTIVATE, win32con.WA_ACTIVE, 0)
-                    restored_after_dialogue = True
 
                 if dialogue_was_active and not notification_played:
                     # Chime when dialogue has finished AND no menu is open.
                     # Previously gated on is_paimon_visible(), which is a
                     # brittle corner-colour probe and does not reliably fire.
+                    #
+                    # The chime also waits out NOTIFY_QUIET_SECONDS after the
+                    # last injected press. A dialogue burst is dozens of F
+                    # presses, and the notification means "done, your turn" -
+                    # firing it mid-burst, or once per flicker of the dialogue
+                    # panel, is just noise. Waiting means the ding lands when
+                    # the bot has actually stopped, and the pending flag is
+                    # deliberately left armed so it can still fire on a later
+                    # tick rather than being dropped.
                     if not d_menu:
-                        if app.notify_enabled:
-                            play_notification_sound()
-                            app.log("dialogue finished, chime played")
-                        notification_played = True
-                        dialogue_was_active = False
+                        if (current_time - last_f_sent) < NOTIFY_QUIET_SECONDS:
+                            pass  # still pressing - stay pending, re-check next tick
+                        else:
+                            if app.notify_enabled:
+                                play_notification_sound()
+                                app.log("dialogue finished, chime played")
+                            notification_played = True
+                            dialogue_was_active = False
 
             if not dialogue_active:
                 sleep(0.1)
                 continue
 
-            # Break logic
+            # Break logic. These exist to look human, so they are deliberate - but a
+            # blind sleep(dur) here froze the whole loop while the TUI kept
+            # claiming "pressing F" with a stopped counter, which read as a
+            # hang. Sleep in slices and redraw, so the countdown is visible.
             if current_time - last_break_check > break_check_interval:
                 last_break_check = current_time
                 if should_take_break():
                     dur = take_random_break()
                     app.log(f"break {dur:.1f}s")
-                    sleep(dur)
+                    try:
+                        os.makedirs(LOGS_DIR, exist_ok=True)
+                        with open(os.path.join(LOGS_DIR, "autoskip.log"), "a", encoding="utf-8") as lf:
+                            lf.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+                                     f"humanising break {dur:.1f}s (not pressing)\n")
+                    except Exception:
+                        pass
+                    break_until = perf_counter() + dur
+                    while perf_counter() < break_until:
+                        remaining = break_until - perf_counter()
+                        app.hold_reason = f"paused {remaining:.1f}s (humanising break)"
+                        sys.stdout.write("\033[H" + render_tui(
+                            d_box, d_marker, d_auto, d_interact, d_paim, d_map,
+                            d_wish, d_set, d_mail, d_evnt, d_party, d_esc,
+                            d_book, d_kath, dialogue_active, d_choice))
+                        sleep(0.25)
+                    app.hold_reason = ""
                     last_f_press = perf_counter()
                     next_f_interval = random_f_key_interval()
                     continue
 
-            # Stand down while the player is driving. The bot runs in the
-            # background and the game must stay responsive to real input, so
-            # touching the keyboard or mouse suspends presses for a moment.
-            note_user_input(current_time)
+            # Stand down while the player is driving *in the game*. Input aimed
+            # at other windows is not the player driving, so pass focus in -
+            # see note_user_input.
+            note_user_input(current_time, is_active)
 
             # Press F
             if current_time - last_f_press >= next_f_interval:
                 if user_is_driving(current_time):
+                    # Standing down for real player input. This was also
+                    # invisible - the verdict still said "pressing F" while the
+                    # counter stood still - so say so explicitly. A held mouse
+                    # button is the usual cause: the game can swallow the
+                    # button-up, leaving it reading as held indefinitely.
+                    app.hold_reason = "your input held - not pressing"
                     last_f_press = current_time
                     next_f_interval = 0.2
                 else:
-                    press_f_background(grabber.hwnd, False)
+                    app.hold_reason = ""
+                    press_f_background(grabber.hwnd, is_active)
                     app.f_presses += 1
+                    session_f_pressed = True
                     last_f_press = current_time
+                    last_f_sent = current_time
                     next_f_interval = random_f_key_interval()
 
             sleep(0.05)
