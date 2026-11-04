@@ -44,21 +44,50 @@ echo.
 color 0E
 echo Checking for uv...
 
-:: Check if uv is installed
+set "UV_CMD="
+
+:: 1. Check if uv is already in PATH
 where uv >nul 2>nul
 if %errorlevel% equ 0 (
-    for /f "tokens=*" %%i in ('uv --version 2^>^&1') do set UV_VERSION=%%i
-    color 0A
-    echo [OK] Found %UV_VERSION%
-    echo.
-    goto run_script
+    set "UV_CMD=uv"
+    goto uv_ready
+)
+
+:: 2. Check Python Scripts directories
+call :add_to_path
+if defined UV_CMD goto uv_ready
+
+:: 3. Check python -m uv
+python -m uv --version >nul 2>nul
+if %errorlevel% equ 0 (
+    set "UV_CMD=python -m uv"
+    goto uv_ready
 )
 
 color 0E
 echo uv not found. Installing uv...
 echo.
 
-:: Try pip first
+:: Try python -m pip first
+python -m pip --version >nul 2>nul
+if %errorlevel% equ 0 (
+    echo Installing uv with python -m pip...
+    python -m pip install uv
+    if %errorlevel% equ 0 (
+        color 0A
+        echo [OK] uv installed successfully!
+        echo.
+        call :add_to_path
+        if defined UV_CMD goto uv_ready
+        python -m uv --version >nul 2>nul
+        if %errorlevel% equ 0 (
+            set "UV_CMD=python -m uv"
+            goto uv_ready
+        )
+    )
+)
+
+:: Try pip if python -m pip failed
 pip --version >nul 2>nul
 if %errorlevel% equ 0 (
     echo Installing uv with pip...
@@ -67,15 +96,13 @@ if %errorlevel% equ 0 (
         color 0A
         echo [OK] uv installed successfully!
         echo.
-        :: Try to add Python Scripts to PATH
         call :add_to_path
-        goto run_script
-    ) else (
-        color 0C
-        echo [ERROR] Failed to install uv with pip.
-        echo This could be due to network issues or permissions.
-        echo.
-        goto install_failed
+        if defined UV_CMD goto uv_ready
+        python -m uv --version >nul 2>nul
+        if %errorlevel% equ 0 (
+            set "UV_CMD=python -m uv"
+            goto uv_ready
+        )
     )
 )
 
@@ -88,22 +115,20 @@ if %errorlevel% equ 0 (
         color 0A
         echo [OK] uv installed successfully!
         echo.
-        :: Try to add Python Scripts to PATH
         call :add_to_path
-        goto run_script
-    ) else (
-        color 0C
-        echo [ERROR] Failed to install uv with pip3.
-        echo This could be due to network issues or permissions.
-        echo.
-        goto install_failed
+        if defined UV_CMD goto uv_ready
+        python -m uv --version >nul 2>nul
+        if %errorlevel% equ 0 (
+            set "UV_CMD=python -m uv"
+            goto uv_ready
+        )
     )
 )
 
 :install_failed
 color 0C
 echo.
-echo [ERROR] Could not install uv.
+echo [ERROR] Could not install or locate uv.
 echo.
 echo Possible reasons:
 echo   - pip/pip3 is not available
@@ -115,6 +140,12 @@ echo   pip install uv
 echo.
 goto end
 
+:uv_ready
+for /f "tokens=*" %%i in ('%UV_CMD% --version 2^>^&1') do set UV_VERSION=%%i
+color 0A
+echo [OK] Found %UV_VERSION%
+echo.
+
 :: ============================================
 :: Run the Script
 :: ============================================
@@ -122,26 +153,9 @@ goto end
 mode con: cols=54 lines=22
 color 0F
 
-:: Final verification before running
-where uv >nul 2>nul
-if %errorlevel% neq 0 (
-    color 0C
-    echo.
-    echo [ERROR] uv command not found at runtime!
-    echo This could mean:
-    echo   - The PATH needs to be refreshed (restart cmd/terminal)
-    echo   - uv installation failed
-    echo   - uv is installed but not in PATH
-    echo.
-    echo Try one of these:
-    echo   1. Close and reopen Command Prompt as Administrator
-    echo   2. Manually run: pip install uv
-    echo   3. Check if uv is in: %%APPDATA%%\Python\Scripts
-    echo.
-    goto end
-)
+if not defined UV_CMD set "UV_CMD=uv"
 
-uv run autoskip_dialogue.py
+%UV_CMD% run autoskip_dialogue.py
 set SCRIPT_EXIT_CODE=%errorlevel%
 
 echo.
@@ -174,33 +188,21 @@ echo Exiting...
 goto end
 
 :add_to_path
-setlocal enabledelayedexpansion
-:: Get Python Scripts directory
-for /f "tokens=*" %%i in ('python -c "import site; print(site.USER_SITE)" 2^>nul') do set PYTHON_USER=%%i
-if defined PYTHON_USER (
-    set SCRIPTS_PATH=!PYTHON_USER!\Scripts
-) else (
-    :: Fallback: try to get from Python executable location
-    for /f "tokens=*" %%i in ('python -c "import sys; print(sys.executable)" 2^>nul') do set PYTHON_EXE=%%i
-    if defined PYTHON_EXE (
-        for %%x in (!PYTHON_EXE!) do set PYTHON_DIR=%%~dpx
-        set SCRIPTS_PATH=!PYTHON_DIR!Scripts
-    )
+:: Check sys.prefix/Scripts
+for /f "tokens=*" %%i in ('python -c "import sys, os; p=os.path.join(sys.prefix, 'Scripts'); print(p if os.path.isfile(os.path.join(p, 'uv.exe')) else '')" 2^>nul') do set "SYS_SCRIPTS=%%i"
+if exist "%SYS_SCRIPTS%\uv.exe" (
+    set "PATH=%SYS_SCRIPTS%;%PATH%"
+    set "UV_CMD=uv"
+    goto :eof
 )
 
-if defined SCRIPTS_PATH (
-    echo Attempting to add Python Scripts to session PATH: !SCRIPTS_PATH!
-    set PATH=!SCRIPTS_PATH!;!PATH!
-
-    :: Verify uv is now accessible
-    where uv >nul 2>nul
-    if %errorlevel% equ 0 (
-        color 0A
-        echo [OK] uv is now accessible in PATH
-        echo.
-    )
+:: Check USER_BASE/Scripts
+for /f "tokens=*" %%i in ('python -c "import site, os; p=os.path.join(site.USER_BASE, 'Scripts'); print(p if os.path.isfile(os.path.join(p, 'uv.exe')) else '')" 2^>nul') do set "USER_SCRIPTS=%%i"
+if exist "%USER_SCRIPTS%\uv.exe" (
+    set "PATH=%USER_SCRIPTS%;%PATH%"
+    set "UV_CMD=uv"
+    goto :eof
 )
-endlocal & set PATH=%PATH%
 goto :eof
 
 :end
