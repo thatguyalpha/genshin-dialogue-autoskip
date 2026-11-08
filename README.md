@@ -52,7 +52,9 @@ The script includes human-like behavior patterns with randomized timing and occa
 - Genshin Impact installed and running
 
 ### In-Game Settings
-**IMPORTANT**: Navigate to **Settings > Other**and set **Auto-Play Story**to **Off**## Installation
+**IMPORTANT**: Navigate to **Settings > Other** and set **Auto-Play Story** to **Off**
+
+## Installation
 
 ### Option 1: Automated Setup (Recommended)
 
@@ -69,7 +71,12 @@ The script includes human-like behavior patterns with randomized timing and occa
  - Install all dependencies
  - Launch the application
 
-### Option 2: Manual Setup
+### Option 2: Setup via pip (setup.bat)
+
+1. Double-click **`setup.bat`** (or run `python -m pip install -r requirements.txt`) to install dependencies.
+2. Run `autoskip_dialogue.py` with Administrator privileges.
+
+### Option 3: Manual Setup with uv
 
 1. **Install Python 3.11+**from [python.org](https://www.python.org/downloads/)
  - Make sure to check "Add Python to PATH" during installation

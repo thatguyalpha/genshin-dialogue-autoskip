@@ -83,7 +83,8 @@ fabric.properties
 .wip/
 
 # Runtime logs & debug captures
-logs/*.png
+logs/
+*.log
 
 # Python
 __pycache__/
