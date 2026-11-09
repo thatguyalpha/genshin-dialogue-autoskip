@@ -268,7 +268,7 @@ def check_pixel(arr: Any, x: int, y: int, target_rgb: tuple, tolerance: int = 8)
         return False
 
 
-# ── Advance diamond template ─────────────────────────────────────
+# ── Advance diamond / rhombus template ───────────────────────────
 # A 56x56 colour-filtered context window centred on the advance diamond at
 # (960,1045) in a 1920x1080 frame. It is a soft gold mask, not raw pixels:
 # matching against a binary colour filter makes the score invariant to
@@ -279,6 +279,18 @@ _ADVANCE_TPL_B64 = (
 )
 _ADVANCE_TPL = np.frombuffer(
     zlib.decompress(base64.b64decode(_ADVANCE_TPL_B64)), dtype=np.uint8
+).reshape((56, 56)).astype(np.float32) / 255.0
+
+# Blue advance rhombus template (used in Snezhnaya / Cryo region dialogue)
+_ADVANCE_BLUE_TPL_B64 = (
+    "eNrt1auygzAQBuC6SOSRkZWRyDwCEolEViKRyEpkJDLyyDxCZCUyMjIy3eUywzDDZTFHHH5FM3zNZYfN43Hnzl8mESK5"
+    "wjKlsuQC095rMkQWIxmOjAxHFnygwWmRprMkOO8tlzUFDsxbKAITlfFn4ch0gUVnPNcn4cTmN1c/91kwebLxP7tH0td8"
+    "MZQbOBwlTtTNFE+O+WE4yCs4VVtytu2EgkU6q17FkEygZQLK4c2LbztpYnS/bVOPqUqwT8bS1sWg022X6hCdntloc8Hl"
+    "kcOthE+HsGkVBKauyvINo7baWeewlfDRILTtIXZ4/ACrxc65TNCBcAG/o+nxiCFs+rjOMQMoVR/oDGov36sZ++YEwxk7"
+    "v2S+k4zUXCZG/eDJbAnJDU1Z7DGW2rITUWC/LuhXxMX74fJ9dOfOP8wXJuhZ4w=="
+)
+_ADVANCE_BLUE_TPL = np.frombuffer(
+    zlib.decompress(base64.b64decode(_ADVANCE_BLUE_TPL_B64)), dtype=np.uint8
 ).reshape((56, 56)).astype(np.float32) / 255.0
 
 _ADVANCE_CX = 960.0
@@ -295,22 +307,31 @@ def _gold_mask(im):
             & ((r - g) >= 40) & (r >= g) & (g >= b)).astype(np.float32)
 
 
+def _blue_mask(im):
+    b = im[:, :, 0].astype(np.int16)
+    g = im[:, :, 1].astype(np.int16)
+    r = im[:, :, 2].astype(np.int16)
+    return ((b >= 140) & (g >= 90) & (r <= 80) & ((b - r) >= 70)
+            & (b >= g) & (g >= r)).astype(np.float32)
+
+
 def is_advance_marker_visible(arr: Any, coords: dict) -> bool:
-    """The gold advance diamond below the dialogue text is showing.
+    """The gold advance diamond or blue rhombus below the dialogue text is showing.
 
     Restored after being removed, and rebuilt. The original implementation
     probed a fixed pixel and demanded a dark surround; it never fired once,
     because the probe point was 19px above the glyph and because the "dark
     surround" assumption is false outdoors.
 
-    This is the "filter then rate the shape" approach: filter to UI gold,
-    correlate a context window against it over a small scale pyramid. Binary
-    colour masks make the score contrast-invariant, the pyramid handles
-    resolution, and the context window is what stops a similarly-coloured blob
-    (the health bar, red foliage, lanterns) from matching.
+    This is the "filter then rate the shape" approach: filter to UI gold or
+    Snezhnaya UI blue, correlate a context window against it over a small scale
+    pyramid. Binary colour masks make the score contrast-invariant, the pyramid
+    handles resolution, and the context window is what stops a similarly-coloured
+    blob (the health bar, red foliage, lanterns) from matching.
 
     Measured over the labelled set: dialogue frames carrying the marker score
     0.857-0.962, everything else tops out at 0.451. Threshold 0.65.
+    Supports both standard gold advance diamond and Snezhnaya blue rhombus.
 
     Note the marker is only on screen for part of a dialogue, so this
     corroborates the text-band gate rather than replacing it.
@@ -334,21 +355,34 @@ def is_advance_marker_visible(arr: Any, coords: dict) -> bool:
         ry0, ry1 = max(0, cy - int(50 * s)), min(height, cy + int(50 * s))
         if rx1 - rx0 < 24 or ry1 - ry0 < 24:
             return False
-        region = _gold_mask(arr[ry0:ry1, rx0:rx1])
-        if min(region.shape) < 56:
-            return False
 
-        best = 0.0
-        for sc in _ADVANCE_SCALES:
-            tw = int(round(56 * sc * s))
-            if tw < 16 or tw >= region.shape[1] or tw >= region.shape[0]:
-                continue
-            tpl = cv2.resize(_ADVANCE_TPL, (tw, tw), interpolation=cv2.INTER_AREA)
-            res = cv2.matchTemplate(region, tpl, cv2.TM_CCOEFF_NORMED)
-            best = max(best, float(cv2.minMaxLoc(res)[1]))
-            if best >= _ADVANCE_MIN_SCORE:
-                return True
-        return best >= _ADVANCE_MIN_SCORE
+        sub = arr[ry0:ry1, rx0:rx1]
+
+        # 1. Gold advance diamond check
+        region_gold = _gold_mask(sub)
+        if min(region_gold.shape) >= 56 and np.count_nonzero(region_gold) >= int(15 * s * s):
+            for sc in _ADVANCE_SCALES:
+                tw = int(round(56 * sc * s))
+                if tw < 16 or tw >= region_gold.shape[1] or tw >= region_gold.shape[0]:
+                    continue
+                tpl = cv2.resize(_ADVANCE_TPL, (tw, tw), interpolation=cv2.INTER_AREA)
+                res = cv2.matchTemplate(region_gold, tpl, cv2.TM_CCOEFF_NORMED)
+                if float(cv2.minMaxLoc(res)[1]) >= _ADVANCE_MIN_SCORE:
+                    return True
+
+        # 2. Blue advance rhombus check (Snezhnaya region quests)
+        region_blue = _blue_mask(sub)
+        if min(region_blue.shape) >= 56 and np.count_nonzero(region_blue) >= int(20 * s * s):
+            for sc in _ADVANCE_SCALES:
+                tw = int(round(56 * sc * s))
+                if tw < 16 or tw >= region_blue.shape[1] or tw >= region_blue.shape[0]:
+                    continue
+                tpl_b = cv2.resize(_ADVANCE_BLUE_TPL, (tw, tw), interpolation=cv2.INTER_AREA)
+                res = cv2.matchTemplate(region_blue, tpl_b, cv2.TM_CCOEFF_NORMED)
+                if float(cv2.minMaxLoc(res)[1]) >= _ADVANCE_MIN_SCORE:
+                    return True
+
+        return False
     except Exception:
         return False
 
